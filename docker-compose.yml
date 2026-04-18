@@ -1,0 +1,181 @@
+services:
+  grafana:
+    image: grafana/grafana:12.4.2
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_METRICS_ENABLED: "true"
+      GF_LOG_MODE: console
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./data/grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - loki
+      - tempo
+      - mimir
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/api/health | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - observability
+
+  loki:
+    image: grafana/loki:3.7.1
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./config/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - ./data/loki:/loki
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD", "/usr/bin/loki", "-config.file=/etc/loki/loki.yaml", "-verify-config=true"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    networks:
+      - observability
+
+  tempo:
+    image: grafana/tempo:2.10.3
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./config/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - ./data/tempo:/var/tempo
+    ports:
+      - "3200:3200"
+    networks:
+      - observability
+
+  mimir:
+    image: grafana/mimir:3.0.5
+    user: "0:0"
+    command: ["-config.file=/etc/mimir/mimir.yaml"]
+    volumes:
+      - ./config/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
+      - ./data/mimir:/data
+    ports:
+      - "9009:9009"
+    networks:
+      - observability
+
+  alloy:
+    image: grafana/alloy:v1.15.0
+    user: "0:0"
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./config/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ./data/alloy:/var/lib/alloy/data
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - loki
+      - tempo
+      - mimir
+    networks:
+      - observability
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - observability
+
+  checkout-api:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    command: ["uvicorn", "checkout_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      APP_SERVICE_NAME: checkout-api
+      APP_PORT: "8000"
+      APP_REDIS_URL: redis://redis:6379/0
+      APP_OTLP_GRPC_ENDPOINT: http://alloy:4317
+      APP_INVENTORY_BASE_URL: http://inventory-api:8001
+      APP_SERVICE_NAMESPACE: observability-poc
+      APP_DEPLOYMENT_ENVIRONMENT: local
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - alloy
+      - redis
+      - inventory-api
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - observability
+
+  inventory-api:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    command: ["uvicorn", "inventory_api.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      APP_SERVICE_NAME: inventory-api
+      APP_PORT: "8001"
+      APP_REDIS_URL: redis://redis:6379/1
+      APP_OTLP_GRPC_ENDPOINT: http://alloy:4317
+      APP_SERVICE_NAMESPACE: observability-poc
+      APP_DEPLOYMENT_ENVIRONMENT: local
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      - alloy
+      - redis
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - observability
+
+  loadgen:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    command: ["python", "-m", "loadgen.main"]
+    environment:
+      LOADGEN_TARGET_URL: http://checkout-api:8000/api/checkout
+      LOADGEN_INTERVAL_SECONDS: "0.5"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      - checkout-api
+    profiles:
+      - loadgen
+    networks:
+      - observability
+
+networks:
+  observability:
+    driver: bridge

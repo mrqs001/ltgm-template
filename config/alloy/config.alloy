@@ -1,0 +1,152 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+otelcol.receiver.otlp "apps" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    traces = [otelcol.processor.batch.telemetry.input]
+    logs   = [otelcol.processor.batch.telemetry.input]
+  }
+}
+
+otelcol.processor.batch "telemetry" {
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+    logs   = [otelcol.exporter.otlphttp.loki.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls {
+      insecure = true
+    }
+  }
+}
+
+otelcol.exporter.otlphttp "loki" {
+  client {
+    endpoint = "http://loki:3100/otlp"
+  }
+}
+
+prometheus.remote_write "mimir" {
+  external_labels = {
+    cluster = "observability-poc",
+    env     = "local",
+  }
+
+  endpoint {
+    url            = "http://mimir:9009/api/v1/push"
+    send_exemplars = true
+  }
+
+  wal {
+    truncate_frequency = "2m"
+    min_keepalive_time = "5m"
+    max_keepalive_time = "30m"
+  }
+}
+
+prometheus.scrape "checkout_api" {
+  targets = [
+    {
+      "__address__" = "checkout-api:8000",
+      "service"     = "checkout-api",
+    },
+  ]
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+  job_name        = "checkout-api"
+  metrics_path    = "/metrics"
+  scrape_interval = "5s"
+  scrape_timeout  = "4s"
+}
+
+prometheus.scrape "inventory_api" {
+  targets = [
+    {
+      "__address__" = "inventory-api:8001",
+      "service"     = "inventory-api",
+    },
+  ]
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+  job_name        = "inventory-api"
+  metrics_path    = "/metrics"
+  scrape_interval = "5s"
+  scrape_timeout  = "4s"
+}
+
+prometheus.scrape "grafana" {
+  targets = [
+    {
+      "__address__" = "grafana:3000",
+      "service"     = "grafana",
+    },
+  ]
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+  job_name        = "grafana"
+  metrics_path    = "/metrics"
+  scrape_interval = "15s"
+}
+
+prometheus.scrape "loki" {
+  targets = [
+    {
+      "__address__" = "loki:3100",
+      "service"     = "loki",
+    },
+  ]
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+  job_name        = "loki"
+  metrics_path    = "/metrics"
+  scrape_interval = "15s"
+}
+
+prometheus.scrape "tempo" {
+  targets = [
+    {
+      "__address__" = "tempo:3200",
+      "service"     = "tempo",
+    },
+  ]
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+  job_name        = "tempo"
+  metrics_path    = "/metrics"
+  scrape_interval = "15s"
+}
+
+prometheus.scrape "mimir" {
+  targets = [
+    {
+      "__address__" = "mimir:9009",
+      "service"     = "mimir",
+    },
+  ]
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+  job_name        = "mimir"
+  metrics_path    = "/metrics"
+  scrape_interval = "15s"
+}
+
+prometheus.scrape "alloy" {
+  targets = [
+    {
+      "__address__" = "alloy:12345",
+      "service"     = "alloy",
+    },
+  ]
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+  job_name        = "alloy"
+  metrics_path    = "/metrics"
+  scrape_interval = "15s"
+}
