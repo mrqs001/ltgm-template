@@ -170,6 +170,6 @@ If Trace Drilldown fails with a Tempo generator error:
 
 - make sure Tempo has the `local-blocks`, `span-metrics`, and `service-graphs` processors enabled in [config/tempo/tempo.yaml](config/tempo/tempo.yaml)
 
-## Public Release Notes
+## License
 
-Before publishing publicly, choose a license that matches how you want others to use the repository. This repo intentionally does not pick one for you.
+This repository is licensed under the MIT License. External components, container images, and services referenced by the stack retain their own licenses.
